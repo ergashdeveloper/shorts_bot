@@ -29,13 +29,13 @@ def is_instagram_url(url):
 
 
 async def download_video(url: str, temp_dir: str) -> str:
-    """Videoni yuklab olish"""
     ydl_opts = {
-        'format': 'best[filesize<50M]/best',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
-        'cookiefile': None,
+        'merge_output_format': 'mp4',
+        'noplaylist': True,
     }
 
     loop = asyncio.get_event_loop()
@@ -44,13 +44,14 @@ async def download_video(url: str, temp_dir: str) -> str:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
+            # mp4 ga o'zgartirish
+            if not filename.endswith('.mp4'):
+                filename = filename.rsplit('.', 1)[0] + '.mp4'
             return filename
 
     filename = await loop.run_in_executor(None, _download)
     return filename
 
-
-# === KOMANDALAR ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -77,7 +78,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
 
-    # URL tekshirish
     if not (is_youtube_url(url) or is_instagram_url(url)):
         await update.message.reply_text(
             "❌ Noto'g'ri havola!\n\n"
@@ -91,7 +91,16 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with tempfile.TemporaryDirectory() as temp_dir:
             filename = await download_video(url, temp_dir)
 
-            # Fayl hajmini tekshirish (50MB limit)
+            # Fayl mavjudligini tekshirish
+            if not os.path.exists(filename):
+                # mp4 bo'lmasa boshqa faylni qidirish
+                files = os.listdir(temp_dir)
+                if files:
+                    filename = os.path.join(temp_dir, files[0])
+                else:
+                    await msg.edit_text("❌ Video yuklab bo'lmadi!")
+                    return
+
             file_size = os.path.getsize(filename)
             if file_size > 50 * 1024 * 1024:
                 await msg.edit_text("❌ Video hajmi 50MB dan katta! Qisqaroq video yuboring.")
@@ -117,10 +126,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif "filesize" in error_msg.lower() or "too large" in error_msg.lower():
             await msg.edit_text("❌ Video hajmi juda katta!")
         else:
-            await msg.edit_text(f"❌ Yuklab bo'lmadi. Boshqa havolani sinab ko'ring.")
+            await msg.edit_text("❌ Yuklab bo'lmadi. Boshqa havolani sinab ko'ring.")
 
-
-# === ISHGA TUSHIRISH ===
 
 def main():
     if not BOT_TOKEN:
