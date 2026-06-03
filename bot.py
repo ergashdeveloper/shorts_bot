@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_youtube_url(url):
-    return any(x in url for x in ['youtube.com', 'youtu.be', 'youtube.com/shorts'])
+    return any(x in url for x in ['youtube.com', 'youtu.be'])
 
 def is_instagram_url(url):
     return 'instagram.com' in url
@@ -25,17 +25,15 @@ def is_instagram_url(url):
 
 async def download_video(url: str, temp_dir: str) -> str:
     ydl_opts = {
-        # Barcha formatlarni sinab ko'radi, eng yaxshisini oladi
-        'format': 'best/bestvideo+bestaudio/worst',
+        # 50MB dan kichik eng yaxshi sifatni tanlaydi
+        'format': 'best[filesize<50M]/best[filesize<100M]/worst',
         'outtmpl': os.path.join(temp_dir, 'video.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # Format mavjud bo'lmasa keyingisini sinaydi
-        'ignoreerrors': False,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web', 'ios'],
+                'player_client': ['android', 'ios', 'web'],
             }
         },
     }
@@ -44,12 +42,11 @@ async def download_video(url: str, temp_dir: str) -> str:
 
     def _download():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            # Yuklab olingan faylni topish
+            ydl.extract_info(url, download=True)
             files = os.listdir(temp_dir)
             if files:
                 return os.path.join(temp_dir, files[0])
-            return ydl.prepare_filename(info)
+            return None
 
     filename = await loop.run_in_executor(None, _download)
     return filename
@@ -63,7 +60,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📸 Instagram (reels, post)\n\n"
         "Foydalanish:\n"
         "Shunchaki video havolasini yuboring!\n\n"
-        "⚠️ Maksimal hajm: 50MB"
+        "⚠️ Maksimal hajm: 50MB\n"
+        "💡 Katta videolar avtomatik kichik sifatda yuklanadi"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,26 +92,28 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename = await download_video(url, temp_dir)
 
             if not filename or not os.path.exists(filename):
-                files = os.listdir(temp_dir)
-                if files:
-                    filename = os.path.join(temp_dir, files[0])
-                else:
-                    await msg.edit_text("❌ Video yuklab bo'lmadi!")
-                    return
-
-            file_size = os.path.getsize(filename)
-            if file_size > 50 * 1024 * 1024:
-                await msg.edit_text("❌ Video hajmi 50MB dan katta!")
+                await msg.edit_text("❌ Video yuklab bo'lmadi!")
                 return
 
-            await msg.edit_text("📤 Telegram ga yuborilmoqda...")
+            file_size = os.path.getsize(filename)
+            size_mb = file_size / (1024 * 1024)
+
+            if file_size > 50 * 1024 * 1024:
+                await msg.edit_text(
+                    f"❌ Video hajmi {size_mb:.1f}MB — juda katta!\n"
+                    f"Telegram 50MB dan katta fayllarni qabul qilmaydi.\n"
+                    f"Qisqaroq video yuboring."
+                )
+                return
+
+            await msg.edit_text(f"📤 Yuborilmoqda... ({size_mb:.1f}MB)")
 
             with open(filename, 'rb') as video_file:
                 await update.message.reply_video(
                     video=video_file,
                     supports_streaming=True,
-                    read_timeout=120,
-                    write_timeout=120,
+                    read_timeout=180,
+                    write_timeout=180,
                 )
 
             await msg.delete()
@@ -122,9 +122,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Xato: {e}")
         error_msg = str(e)
         if "private" in error_msg.lower() or "login" in error_msg.lower():
-            await msg.edit_text("❌ Bu video private! Faqat ochiq videolarni yuklab olish mumkin.")
-        elif "too large" in error_msg.lower():
-            await msg.edit_text("❌ Video hajmi juda katta!")
+            await msg.edit_text("❌ Bu video private!")
         else:
             await msg.edit_text("❌ Yuklab bo'lmadi. Boshqa havolani sinab ko'ring.")
 
