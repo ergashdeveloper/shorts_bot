@@ -7,7 +7,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import yt_dlp
 
-# === SOZLAMALAR ===
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 logging.basicConfig(
@@ -18,11 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_youtube_url(url):
-    patterns = [
-        r'(https?://)?(www\.)?(youtube\.com|youtu\.be)/.+',
-        r'(https?://)?(www\.)?youtube\.com/shorts/.+',
-    ]
-    return any(re.match(p, url) for p in patterns)
+    return any(x in url for x in ['youtube.com', 'youtu.be', 'youtube.com/shorts'])
 
 def is_instagram_url(url):
     return 'instagram.com' in url
@@ -30,12 +25,19 @@ def is_instagram_url(url):
 
 async def download_video(url: str, temp_dir: str) -> str:
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+        # Barcha formatlarni sinab ko'radi, eng yaxshisini oladi
+        'format': 'best/bestvideo+bestaudio/worst',
+        'outtmpl': os.path.join(temp_dir, 'video.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
-        'merge_output_format': 'mp4',
         'noplaylist': True,
+        # Format mavjud bo'lmasa keyingisini sinaydi
+        'ignoreerrors': False,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web', 'ios'],
+            }
+        },
     }
 
     loop = asyncio.get_event_loop()
@@ -43,11 +45,11 @@ async def download_video(url: str, temp_dir: str) -> str:
     def _download():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            # mp4 ga o'zgartirish
-            if not filename.endswith('.mp4'):
-                filename = filename.rsplit('.', 1)[0] + '.mp4'
-            return filename
+            # Yuklab olingan faylni topish
+            files = os.listdir(temp_dir)
+            if files:
+                return os.path.join(temp_dir, files[0])
+            return ydl.prepare_filename(info)
 
     filename = await loop.run_in_executor(None, _download)
     return filename
@@ -91,9 +93,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with tempfile.TemporaryDirectory() as temp_dir:
             filename = await download_video(url, temp_dir)
 
-            # Fayl mavjudligini tekshirish
-            if not os.path.exists(filename):
-                # mp4 bo'lmasa boshqa faylni qidirish
+            if not filename or not os.path.exists(filename):
                 files = os.listdir(temp_dir)
                 if files:
                     filename = os.path.join(temp_dir, files[0])
@@ -103,7 +103,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             file_size = os.path.getsize(filename)
             if file_size > 50 * 1024 * 1024:
-                await msg.edit_text("❌ Video hajmi 50MB dan katta! Qisqaroq video yuboring.")
+                await msg.edit_text("❌ Video hajmi 50MB dan katta!")
                 return
 
             await msg.edit_text("📤 Telegram ga yuborilmoqda...")
@@ -121,9 +121,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Xato: {e}")
         error_msg = str(e)
-        if "Private" in error_msg or "login" in error_msg.lower():
+        if "private" in error_msg.lower() or "login" in error_msg.lower():
             await msg.edit_text("❌ Bu video private! Faqat ochiq videolarni yuklab olish mumkin.")
-        elif "filesize" in error_msg.lower() or "too large" in error_msg.lower():
+        elif "too large" in error_msg.lower():
             await msg.edit_text("❌ Video hajmi juda katta!")
         else:
             await msg.edit_text("❌ Yuklab bo'lmadi. Boshqa havolani sinab ko'ring.")
@@ -135,7 +135,6 @@ def main():
         return
 
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
